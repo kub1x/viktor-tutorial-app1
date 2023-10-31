@@ -7,3 +7,4 @@ tasks:
     command: |
       echo "export PATH=\$PATH:/workspace" >> ~/.bashrc
       source ~/.bashrc
+      viktor-cli upgrade
