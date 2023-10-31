@@ -1,3 +1,5 @@
+alias la='ls -lahFG'
+
 ## git
 
 alias ga='git add'
