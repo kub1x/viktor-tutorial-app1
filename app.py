@@ -9,10 +9,19 @@ from viktor.parametrization import NumberField
 from viktor.parametrization import Text
 
 from viktor.external.dynamo import DynamoFile
+from viktor.external.dynamo import get_dynamo_result
 from viktor.external.dynamo import convert_geometry_to_glb
+
+from viktor.external.generic import GenericAnalysis
 
 from viktor.views import GeometryResult
 from viktor.views import GeometryView
+from viktor.views import DataGroup
+from viktor.views import DataItem
+from viktor.views import DataResult
+from viktor.views import DataView
+from viktor.views import GeometryAndDataResult
+from viktor.views import GeometryAndDataView
 
 class Parametrization(ViktorParametrization):
     intro = Text("# 3D  Dynamo app \n This app parametrically generates and visualises a 3D model of a house using a Dynamo script. \n\n Please fill in the following parameters:")
@@ -53,6 +62,31 @@ class Controller(ViktorController):
 
         return input_file, dyn_file
 
+    @staticmethod
+    def convert_dynamo_file_to_data_items(input_file: DynamoFile, output_file: File) -> DataGroup:
+        """Extracts the output of the Dynamo results by using the input and output files."""
+        # Collect ids for the computational output from the Dynamo file (numerical output)
+        output_id_floor_area = input_file.get_node_id("(OUTPUT) Floor area per house")
+        output_id_total_cost = input_file.get_node_id("(OUTPUT) Total cost")
+        output_id_mki = input_file.get_node_id("(OUTPUT) MKI")
+        output_id_co2 = input_file.get_node_id("(OUTPUT) CO2")
+
+        # Collect the numerical results from the output file using the collected ids
+        with output_file.open_binary() as f:
+            floor_area = get_dynamo_result(f, id_=output_id_floor_area)
+            total_cost = get_dynamo_result(f, id_=output_id_total_cost)
+            mki = get_dynamo_result(f, id_=output_id_mki)
+            co2 = get_dynamo_result(f, id_=output_id_co2)
+
+        # Add values to a structured data group
+        data_group = DataGroup(
+            DataItem(label="Floor area", value=round(float(floor_area), 2), suffix="m²"),
+            DataItem(label="Total cost", value=round(float(total_cost), 2), suffix="€"),
+            DataItem(label="MKI", value=round(float(mki), 2)),
+            DataItem(label="CO₂ emission", value=round(float(co2), 2), suffix="ton CO₂"),
+        )
+        return data_group
+
     @GeometryView("Mocked 3d model", duration_guess=1)
     def mocked_geometry_view(self, params, **kwargs):
         # Step 1: Update model
@@ -66,3 +100,43 @@ class Controller(ViktorController):
         glb_file = convert_geometry_to_glb(_3d_file)
 
         return GeometryResult(geometry=glb_file)
+
+    @DataView("Mocked data results", duration_guess=1)
+    def mocked_data_view(self, params, **kwargs):
+        # Step 1: Update model
+        input_file, dynamo_file = self.update_model(params)
+
+        # Step 2: Running analysis
+        file_path = Path(__file__).parent / "Mocked_data_results.xml"
+        _data_file = File.from_path(file_path)
+
+        # Step 3: Process numerical output
+        data_group = self.convert_dynamo_file_to_data_items(dynamo_file, _data_file)
+
+        return DataResult(data=data_group)
+
+    @GeometryAndDataView("Building 3D", duration_guess=5)
+    def geometry_and_data_view(self, params, **kwargs):
+        """The endpoint that initiates the logic to visualize the geometry and data executed
+        and retrieved from a Dynamo script."""
+        # Step 1: Update model
+        input_file, dynamo_file = self.update_model(params)
+
+        # Step 2: Running analysis
+        files = [
+            ('input.dyn', input_file),
+        ]
+
+        generic_analysis = GenericAnalysis(files=files, executable_key="dynamo",
+                                           output_filenames=["output.xml", "geometry.json"])
+        generic_analysis.execute(timeout=60)
+
+        # Step 3: Processing geometry
+        geometry_file = generic_analysis.get_output_file('geometry.json', as_file=True)
+        glb_file = convert_geometry_to_glb(geometry_file)
+
+        # Step 4: Process numerical output
+        output_file = generic_analysis.get_output_file('output.xml', as_file=True)
+        data_group = self.convert_dynamo_file_to_data_items(dynamo_file, output_file)
+
+        return GeometryAndDataResult(geometry=glb_file, data=data_group)
